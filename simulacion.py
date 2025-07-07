@@ -15,13 +15,15 @@ class SimuladorVentiladorCPU:
         self.params = {
             'temp_ref': tk.DoubleVar(value=65.0),
             'temp_ambiente': tk.DoubleVar(value=22.0),
-            'Kp': tk.DoubleVar(value=15.0),
-            'Ki': tk.DoubleVar(value=2.0),
+            'Kp': tk.DoubleVar(value=0.5),
+            'Ki': tk.DoubleVar(value=0.1),
             'tiempo_scan': tk.DoubleVar(value=0.5),
-            'total_time': tk.DoubleVar(value=150.0),
+            'total_time': tk.DoubleVar(value=500.0),
             'rpm_min': tk.DoubleVar(value=600),
             'rpm_max': tk.DoubleVar(value=3000),
             'rpm_nominal': tk.DoubleVar(value=1500),
+            'q_cpu': tk.DoubleVar(value=1.0),
+            'coef_diss': tk.DoubleVar(value=0.002),
         }
 
         self.perturbaciones = {
@@ -65,6 +67,8 @@ class SimuladorVentiladorCPU:
             ("RPM mínimo:", 'rpm_min'),
             ("RPM máximo:", 'rpm_max'),
             ("RPM nominal:", 'rpm_nominal'),
+            ("Generación de calor (°C/s):", 'q_cpu'),
+            ("Coef. disipación (°C/s/RPM):", 'coef_diss'),
         ]:
             frame = ttk.Frame(tab_sistema)
             frame.pack(fill=tk.X, pady=2)
@@ -124,6 +128,9 @@ class SimuladorVentiladorCPU:
             rpm_max = self.params['rpm_max'].get()
             rpm = self.params['rpm_nominal'].get()
 
+            q_cpu = self.params['q_cpu'].get() # °C/seg que genera la CPU
+            coef_diss = self.params['coef_diss'].get()
+
             emi_ini = self.perturbaciones['emi_inicio'].get()
             emi_dur = self.perturbaciones['emi_duracion'].get()
             emi_mag = self.perturbaciones['emi_magnitud'].get()
@@ -132,19 +139,35 @@ class SimuladorVentiladorCPU:
             temp_cpu = temp_ambiente + 10
             integral = 0
 
+
+
             temps = []
             rpms = []
             accion_p = []
             accion_i = []
             falla_detectada = False
 
+            print(f"\n=== INICIO DE SIMULACIÓN ===")
+            print(f"Temperatura objetivo: {temp_ref}°C")
+            print(f"Temperatura inicial: {temp_cpu}°C")
+            print(f"Ganancias: Kp={Kp}, Ki={Ki}")
+            print(f"RPM inicial: {rpm}")
+            print(f"Generación de calor: {q_cpu}°C/s")
+            print(f"Coef. disipación: {coef_diss}°C/s/RPM")
+            print(f"Perturbación EMI: inicio={emi_ini}s, duración={emi_dur}s, magnitud={emi_mag}RPM")
+            print(f"Tiempo de muestreo: {dt}s, Tiempo total: {T}s")
+            print(f"{'Tiempo':>8} {'Temp':>8} {'RPM':>8} {'Error':>8} {'Acción P':>10} {'Acción I':>10} {'EMI':>6}")
+            print("-" * 70)
+
             for t in t_values:
                 error = temp_ref - temp_cpu
-                p = Kp * error
+                p = -Kp * error
                 integral += error * dt
-                i = Ki * integral
-
+                # Anti-windup: limitar la integral
+                integral = max(min(integral, 200), -200)
+                i = -Ki * integral
                 control = p + i
+
                 rpm += control
 
                 if emi_ini <= t <= emi_ini + emi_dur:
@@ -153,13 +176,24 @@ class SimuladorVentiladorCPU:
                 rpm = max(rpm_min, min(rpm_max, rpm))
 
                 ruido = random.uniform(-0.1, 0.1)  # ahora el ruido es de solo ±0.1 °C
-                temp_cpu += (0.005 * (rpm - 1500)) + ruido
+
+                efecto_ventilador = coef_diss * rpm  # °C/seg que disipa el ventilador
+                
+                # Cambio de temperatura
+                dtemp = (q_cpu - efecto_ventilador) * dt
+                temp_cpu += dtemp + ruido
                 temp_cpu = max(temp_ambiente, temp_cpu)
 
                 temps.append(temp_cpu)
                 rpms.append(rpm)
                 accion_p.append(p)
                 accion_i.append(i)
+
+                # Log cada 5 muestras para no saturar la consola
+                emi_activa = emi_ini <= t <= emi_ini + emi_dur
+                emi_texto = "SÍ" if emi_activa else "NO"
+                if len(temps) % 5 == 0:  # Mostrar cada 5 muestras
+                    print(f"{t:8.1f} {temp_cpu:8.2f} {rpm:8.0f} {error:8.2f} {p:10.2f} {i:10.2f} {emi_texto:>6}")
 
                 if (emi_dur / T > 0.5) and abs(temp_ref - temp_cpu) > 20:
                     falla_detectada = True
@@ -216,6 +250,23 @@ class SimuladorVentiladorCPU:
             self.ax3.grid(True)
 
             self.canvas.draw()
+            self.fig.savefig("simulacion_resultado.png")
+
+            # Resumen final en consola
+            print("-" * 70)
+            print(f"=== RESUMEN DE SIMULACIÓN ===")
+            print(f"Temperatura final: {temp_cpu:.2f}°C")
+            print(f"RPM final: {rpm:.0f}")
+            print(f"Error final: {temp_ref - temp_cpu:.2f}°C")
+            print(f"Temperatura máxima alcanzada: {max(temps):.2f}°C")
+            print(f"Temperatura mínima alcanzada: {min(temps):.2f}°C")
+            print(f"RPM máximo alcanzado: {max(rpms):.0f}")
+            print(f"RPM mínimo alcanzado: {min(rpms):.0f}")
+            print(f"Generación de calor: {q_cpu}°C/s")
+            print(f"Coef. disipación: {coef_diss}°C/s/RPM")
+            if falla_detectada:
+                print("¡FALLA DEL SISTEMA DETECTADA!")
+            print("=" * 30)
 
             self.resultado_text.delete(1.0, tk.END)
             self.resultado_text.insert(tk.END, f"Simulación completada con Kp={Kp}, Ki={Ki}\n")
