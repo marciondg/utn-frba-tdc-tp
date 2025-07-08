@@ -15,8 +15,8 @@ class SimuladorVentiladorCPU:
         self.params = {
             'temp_ref': tk.DoubleVar(value=65.0),
             'temp_ambiente': tk.DoubleVar(value=22.0),
-            'Kp': tk.DoubleVar(value=0.5),
-            'Ki': tk.DoubleVar(value=0.1),
+            'Kp': tk.DoubleVar(value=15),
+            'Ki': tk.DoubleVar(value=2),
             'Kd': tk.DoubleVar(value=0.01),
             'tiempo_scan': tk.DoubleVar(value=0.5),
             'total_time': tk.DoubleVar(value=500.0),
@@ -234,8 +234,11 @@ class SimuladorVentiladorCPU:
 
                 efecto_ventilador = coef_diss * rpm  # °C/seg que disipa el ventilador
                 
+                #coef_pasivo = 0.005
+                #tau = 10
                 # Cambio de temperatura
                 dtemp = (q_cpu - efecto_ventilador) * dt
+                #dtemp = (q_cpu - efecto_ventilador - (temp_cpu - temp_ambiente)/tau) * dt
                 temp_cpu += dtemp + ruido
                 temp_cpu = max(temp_ambiente, temp_cpu)
 
