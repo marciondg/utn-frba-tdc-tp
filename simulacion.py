@@ -63,7 +63,7 @@ class SimuladorVentiladorCPU:
             ("Temperatura ambiente (°C):", 'temp_ambiente'),
             ("Ganancia Proporcional (Kp):", 'Kp'),
             ("Ganancia Integral (Ki):", 'Ki'),
-            ("Ganancia Derivativa (Kd):", 'Kd'),
+            #("Ganancia Derivativa (Kd):", 'Kd'),
             ("Tiempo de muestreo (s):", 'tiempo_scan'),
             ("Tiempo total (s):", 'total_time'),
             ("RPM mínimo:", 'rpm_min'),
@@ -147,7 +147,7 @@ class SimuladorVentiladorCPU:
             rpms = []
             accion_p = []
             accion_i = []
-            accion_d = []
+            #accion_d = []
             falla_detectada = False
 
             print(f"\n=== INICIO DE SIMULACIÓN ===")
@@ -187,22 +187,38 @@ class SimuladorVentiladorCPU:
                 """
                 # 1. Calculá el error
                 error = temp_ref - temp_cpu
+                
+                if abs(error) < 3:
+                    control = 0 # zona muerta
+                else:
+                    # 2. Calculá términos P, I, D (pero NO sumes todavía la integral)
+                    p = Kp * error
+                    d = Kd * (error - error_prev) / dt
 
-                # 2. Calculá términos P, I, D (pero NO sumes todavía la integral)
-                p = Kp * error
-                d = Kd * (error - error_prev) / dt
+                    # 3. Calculá la acción integral "candidata"
+                    integral_candidate = integral + error * dt
+                    i = Ki * integral_candidate
+                    # 4. Calculá la salida total de control
+                    control = -(p + i)
 
-                # 3. Calculá la acción integral "candidata"
-                integral_candidate = integral + error * dt
-                i = Ki * integral_candidate
-                # 4. Calculá la salida total de control
-                control = -(p + i + d)
+                max_delta_rpm = 100   # 100–200 RPM por ciclo es un valor típico para un dt = 0.5 s.
+
+                # Antes de aplicar el cambio de RPM, limitá la variación máxima:
+                if control > max_delta_rpm:
+                    control = max_delta_rpm
+                elif control < -max_delta_rpm:
+                    control = -max_delta_rpm
 
                 # 5. Aplicá el control a RPM y hacé el clamp
                 rpm += control
+
+                # 6. Perturbación EMI
+                if emi_ini <= t <= emi_ini + emi_dur:
+                    rpm -= emi_mag
+
                 rpm = max(rpm_min, min(rpm_max, rpm))
 
-                # 6. Ahora sí, ACTUALIZÁ la integral **sólo si el actuador NO está saturado en la dirección del error**
+                # 7. Ahora sí, ACTUALIZÁ la integral **sólo si el actuador NO está saturado en la dirección del error**
                 if (rpm <= rpm_min and error > 0) or (rpm >= rpm_max and error < 0):
                     # No acumules, porque el control no puede actuar
                     pass
@@ -212,7 +228,7 @@ class SimuladorVentiladorCPU:
                     integral = max(min(integral, 300), -300)
 
                 # 7. Guardá el error para el derivativo
-                error_prev = error
+                #error_prev = error
 
                 ruido = random.uniform(-0.1, 0.1)  # ahora el ruido es de solo ±0.1 °C
 
@@ -227,7 +243,7 @@ class SimuladorVentiladorCPU:
                 rpms.append(rpm)
                 accion_p.append(p)
                 accion_i.append(i)
-                accion_d.append(d)
+                #accion_d.append(d)
 
                 # Log cada 5 muestras para no saturar la consola
                 emi_activa = emi_ini <= t <= emi_ini + emi_dur
@@ -278,12 +294,12 @@ class SimuladorVentiladorCPU:
                 self.ax3.plot(t_values[idx_falla:], accion_p[idx_falla:], color='darkred', label='Acción P durante Falla')
                 self.ax3.plot(t_values[:idx_falla], accion_i[:idx_falla], color='green', label='Acción Integral')
                 self.ax3.plot(t_values[idx_falla:], accion_i[idx_falla:], color='darkgreen', label='Acción I durante Falla')
-                self.ax3.plot(t_values[:idx_falla], accion_d[:idx_falla], color='blue', label='Acción Derivativa')
-                self.ax3.plot(t_values[idx_falla:], accion_d[idx_falla:], color='darkblue', label='Acción D durante Falla')
+                #self.ax3.plot(t_values[:idx_falla], accion_d[:idx_falla], color='blue', label='Acción Derivativa')
+                #self.ax3.plot(t_values[idx_falla:], accion_d[idx_falla:], color='darkblue', label='Acción D durante Falla')
             else:
                 self.ax3.plot(t_values, accion_p, color='orange', label='Acción Proporcional')
                 self.ax3.plot(t_values, accion_i, color='green', label='Acción Integral')
-                self.ax3.plot(t_values, accion_d, color='blue', label='Acción Derivativa')
+                # self.ax3.plot(t_values, accion_d, color='blue', label='Acción Derivativa')
             self.ax3.axvline(emi_ini, color='red', linestyle='--', alpha=0.7)
             self.ax3.axvline(emi_ini + emi_dur, color='purple', linestyle='--', alpha=0.7)
             self.ax3.axvspan(emi_ini, emi_ini + emi_dur, color='red', alpha=0.1)
