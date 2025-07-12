@@ -180,6 +180,7 @@ class SimuladorVentiladorCPU:
             perturbaciones = []
 
             falla_detectada = False
+            self.tiempo_fuera_control = 0  # Inicializar contador de tiempo fuera de control
 
             self.log(f"\n=== INICIO DE SIMULACIÓN ===")
             self.log(f"Temperatura objetivo: {temp_ref}°C")
@@ -298,24 +299,38 @@ class SimuladorVentiladorCPU:
                 if len(temps) % 5 == 0:  # Mostrar cada 5 muestras
                     print(f"{t:8.1f} {temp_cpu:8.2f} {rpm:8.0f} {error:8.2f} {p:10.2f} {i:10.2f} {d:10.2f} {emi_texto:>6} {carga_texto:>12}")
 
-                if (
-                    ((emi_dur / T > 0.5) or (pert_carga_dur / T > 0.5))
-                    and abs(temp_ref - temp_cpu) > 20
-                ):
-                    falla_detectada = True
+                # Detección de falla: solo cuando hay perturbaciones activas y el sistema no puede controlar
+                hay_perturbacion_activa = emi_activa or carga_activa
+                
+                if t > 30 and hay_perturbacion_activa and abs(error) > umbral * 3:
+                    self.tiempo_fuera_control += dt
+                    if self.tiempo_fuera_control > 10:
+                        falla_detectada = True
+                        break  # Detener la simulación inmediatamente
+                else:
+                    self.tiempo_fuera_control = 0
 
-            idx_falla = np.where(t_values >= emi_ini)[0][0] if falla_detectada else None
+            # Determinar el momento de la falla
+            if falla_detectada:
+                idx_falla = len(errores) - 1
+            else:
+                idx_falla = None
+
+            # Unificar longitud de todos los datos
+            min_len = min(len(temps), len(errores), len(controles), len(rpms))
+            t_real = t_values[:min_len]
+            temps = temps[:min_len]
+            errores = errores[:min_len]
+            controles = controles[:min_len]
+            rpms = rpms[:min_len]
 
             # Gráfico 1 - Salida del sistema (Temperatura)
             self.ax1.clear()
             self.ax1.axhspan(temp_ref - umbral, temp_ref + umbral, color='green', alpha=0.15, label='Franja aceptable')
             if falla_detectada:
-                self.ax1.plot(t_values[:idx_falla], temps[:idx_falla], label='Temp CPU')
-                self.ax1.plot(t_values[idx_falla:], temps[idx_falla:], color='red', label='Temp durante Falla')
-                self.ax1.text(0.5, 0.85, 'FALLA DEL SISTEMA', transform=self.ax1.transAxes,
-                              fontsize=16, color='red', ha='center')
+                self.ax1.plot(t_real, temps, color='red', label='Temp CPU (Falla)')
             else:
-                self.ax1.plot(t_values, temps, label='Temp CPU')
+                self.ax1.plot(t_real, temps, label='Temp CPU')
             self.ax1.axhline(temp_ref, color='r', linestyle='--', label='Ref')
             self.ax1.axvline(emi_ini, color='red', linestyle='--', alpha=0.7, label='Inicio EMI')
             self.ax1.axvline(emi_ini + emi_dur, color='purple', linestyle='--', alpha=0.7, label='Fin EMI')
@@ -324,15 +339,15 @@ class SimuladorVentiladorCPU:
             self.ax1.set_ylabel('Temp CPU (°C)')
             self.ax1.legend()
             self.ax1.grid(True)
+            self.ax1.set_xlim(0, T)
 
             # Gráfico 2 - Error (Temperatura deseada - temperatura real)
             self.ax2.clear()
             self.ax2.axhspan(-umbral, umbral, color='green', alpha=0.15, label='Franja aceptable')
             if falla_detectada:
-                self.ax2.plot(t_values[:idx_falla], errores[:idx_falla], color='magenta', label='Error')
-                self.ax2.plot(t_values[idx_falla:], errores[idx_falla:], color='red', label='Error durante Falla')
+                self.ax2.plot(t_real, errores, color='red', label='Error (Falla)')
             else:
-                self.ax2.plot(t_values, errores, color='magenta', label='Error')
+                self.ax2.plot(t_real, errores, color='magenta', label='Error')
             self.ax2.axhline(0, color='black', linestyle='-', alpha=0.5)
             self.ax2.axvline(emi_ini, color='red', linestyle='--', alpha=0.7)
             self.ax2.axvline(emi_ini + emi_dur, color='purple', linestyle='--', alpha=0.7)
@@ -341,6 +356,7 @@ class SimuladorVentiladorCPU:
             self.ax2.set_ylabel('Error (°C)')
             self.ax2.legend()
             self.ax2.grid(True)
+            self.ax2.set_xlim(0, T)
 
             """
             # Gráfico 3 - Acción del controlador (acción proporcional - integral)
@@ -368,10 +384,9 @@ class SimuladorVentiladorCPU:
             # Gráfico 3 - Acción del controlador (control final aplicado)
             self.ax3.clear()
             if falla_detectada:
-                self.ax3.plot(t_values[:idx_falla], controles[:idx_falla], color='orange', label='Control')
-                self.ax3.plot(t_values[idx_falla:], controles[idx_falla:], color='red', label='Control durante Falla')
+                self.ax3.plot(t_real, controles, color='red', label='Control (Falla)')
             else:
-                self.ax3.plot(t_values, controles, color='orange', label='Control')
+                self.ax3.plot(t_real, controles, color='orange', label='Control')
             self.ax3.axhline(0, color='black', linestyle='-', alpha=0.5)
             self.ax3.axvline(emi_ini, color='red', linestyle='--', alpha=0.7)
             self.ax3.axvline(emi_ini + emi_dur, color='purple', linestyle='--', alpha=0.7)
@@ -380,14 +395,14 @@ class SimuladorVentiladorCPU:
             self.ax3.set_ylabel('Control')
             self.ax3.legend()
             self.ax3.grid(True)
+            self.ax3.set_xlim(0, T)
 
             # Gráfico 4 - Acción del actuador (RPM del ventilador)
             self.ax4.clear()
             if falla_detectada:
-                self.ax4.plot(t_values[:idx_falla], rpms[:idx_falla], label='RPM')
-                self.ax4.plot(t_values[idx_falla:], rpms[idx_falla:], color='red', label='RPM durante Falla')
+                self.ax4.plot(t_real, rpms, color='red', label='RPM (Falla)')
             else:
-                self.ax4.plot(t_values, rpms, label='RPM')
+                self.ax4.plot(t_real, rpms, label='RPM')
             self.ax4.axvline(emi_ini, color='red', linestyle='--', alpha=0.7)
             self.ax4.axvline(emi_ini + emi_dur, color='purple', linestyle='--', alpha=0.7)
             self.ax4.axvspan(emi_ini, emi_ini + emi_dur, color='red', alpha=0.1)
@@ -396,7 +411,14 @@ class SimuladorVentiladorCPU:
             self.ax4.set_xlabel('Tiempo (s)')
             self.ax4.legend()
             self.ax4.grid(True)
+            self.ax4.set_xlim(0, T)
 
+            # Mostrar título general de falla si corresponde
+            if falla_detectada:
+                self.fig.suptitle('FALLA DEL SISTEMA', fontsize=22, color='red', weight='bold')
+            else:
+                self.fig.suptitle('')
+                
             # Ajustar espacios y márgenes de la figura
             self.fig.subplots_adjust(hspace=0.25, top=0.95)
 
@@ -417,11 +439,16 @@ class SimuladorVentiladorCPU:
             self.log(f"Coef. disipación: {coef_diss}°C/s/RPM")
             if falla_detectada:
                 self.log("¡FALLA DEL SISTEMA DETECTADA!")
+                self.log(f"El sistema estuvo fuera de control por {self.tiempo_fuera_control:.1f} segundos")
+            else:
+                self.log("SISTEMA FUNCIONANDO CORRECTAMENTE")
             self.log("=" * 30)
 
             self.resultado_text.insert(tk.END, f"Simulación completada con Kp={Kp}, Ki={Ki}\n")
             if falla_detectada:
-                self.resultado_text.insert(tk.END, "¡Falla del sistema detectada por perturbación prolongada!\n")
+                self.resultado_text.insert(tk.END, f"¡Falla del sistema detectada! El sistema estuvo fuera de control por {self.tiempo_fuera_control:.1f} segundos\n")
+            else:
+                self.resultado_text.insert(tk.END, "Sistema funcionando correctamente - todas las perturbaciones fueron controladas\n")
 
         except Exception as e:
             messagebox.showerror("Error", str(e))
