@@ -2,7 +2,8 @@ import numpy as np
 import matplotlib.pyplot as plt
 import tkinter as tk
 from tkinter import ttk, messagebox
-from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolbar2Tk
+from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+from matplotlib.backends._backend_tk import NavigationToolbar2Tk
 from matplotlib.figure import Figure
 import random
 
@@ -15,6 +16,7 @@ class SimuladorVentiladorCPU:
         self.params = {
             'temp_ref': tk.DoubleVar(value=65.0),
             'temp_ambiente': tk.DoubleVar(value=22.0),
+            'umbral': tk.DoubleVar(value=3),
             'Kp': tk.DoubleVar(value=15),
             'Ki': tk.DoubleVar(value=2),
             'Kd': tk.DoubleVar(value=0.01),
@@ -28,9 +30,12 @@ class SimuladorVentiladorCPU:
         }
 
         self.perturbaciones = {
-            'emi_inicio': tk.DoubleVar(value=50.0),
-            'emi_duracion': tk.DoubleVar(value=3.0),
-            'emi_magnitud': tk.DoubleVar(value=500.0),
+            'emi_inicio': tk.DoubleVar(value=0),
+            'emi_duracion': tk.DoubleVar(value=0),
+            'emi_magnitud': tk.DoubleVar(value=0),
+            'pert_carga_inicio': tk.DoubleVar(value=0),
+            'pert_carga_duracion': tk.DoubleVar(value=0),
+            'pert_carga_magnitud': tk.DoubleVar(value=0),
         }
 
         self.simulacion_activa = False
@@ -61,9 +66,10 @@ class SimuladorVentiladorCPU:
         for label, key in [
             ("Temperatura objetivo (°C):", 'temp_ref'),
             ("Temperatura ambiente (°C):", 'temp_ambiente'),
+            ("Umbral de error (°C):", 'umbral'),
             ("Ganancia Proporcional (Kp):", 'Kp'),
             ("Ganancia Integral (Ki):", 'Ki'),
-            #("Ganancia Derivativa (Kd):", 'Kd'),
+            ("Ganancia Derivativa (Kd):", 'Kd'),
             ("Tiempo de muestreo (s):", 'tiempo_scan'),
             ("Tiempo total (s):", 'total_time'),
             ("RPM mínimo:", 'rpm_min'),
@@ -77,6 +83,9 @@ class SimuladorVentiladorCPU:
             ttk.Label(frame, text=label).pack(side=tk.LEFT)
             ttk.Entry(frame, textvariable=self.params[key], width=10).pack(side=tk.RIGHT)
 
+        # Muevo el botón a la pestaña Sistema
+        ttk.Button(tab_sistema, text="Ejecutar Simulación", command=self.ejecutar_simulacion).pack(pady=10)
+
         tab_pert = ttk.Frame(notebook)
         notebook.add(tab_pert, text="Perturbaciones EMI/RFI")
 
@@ -84,32 +93,33 @@ class SimuladorVentiladorCPU:
             ("Inicio de EMI (s):", 'emi_inicio'),
             ("Duración de EMI (s):", 'emi_duracion'),
             ("Magnitud EMI (RPM):", 'emi_magnitud'),
+            ("Inicio perturbación de carga (s):", 'pert_carga_inicio'),
+            ("Duración perturbación de carga (s):", 'pert_carga_duracion'),
+            ("Magnitud perturbación de carga (°C/s):", 'pert_carga_magnitud'),
         ]:
             frame = ttk.Frame(tab_pert)
             frame.pack(fill=tk.X, pady=2)
             ttk.Label(frame, text=label).pack(side=tk.LEFT)
             ttk.Entry(frame, textvariable=self.perturbaciones[key], width=10).pack(side=tk.RIGHT)
 
-        tab_control = ttk.Frame(notebook)
-        notebook.add(tab_control, text="Control")
-
-        ttk.Button(tab_control, text="Ejecutar Simulación", command=self.ejecutar_simulacion).pack(pady=10)
-
-        self.resultado_text = tk.Text(tab_control, height=10, width=45, font=('Courier', 9))
+        self.resultado_text = tk.Text(tab_sistema, height=10, width=45, font=('Courier', 9))
         self.resultado_text.pack(fill=tk.BOTH, expand=True)
 
     def crear_graficos(self):
-        self.fig = Figure(figsize=(12, 9), dpi=100)
-        self.ax1 = self.fig.add_subplot(3, 1, 1)
-        self.ax2 = self.fig.add_subplot(3, 1, 2)
-        self.ax3 = self.fig.add_subplot(3, 1, 3)
+        self.fig = Figure(figsize=(14, 12), dpi=100)
+        self.ax1 = self.fig.add_subplot(4, 1, 1)
+        self.ax2 = self.fig.add_subplot(4, 1, 2)
+        self.ax3 = self.fig.add_subplot(4, 1, 3)
+        self.ax4 = self.fig.add_subplot(4, 1, 4)
 
         self.ax1.set_ylabel('Temp CPU (°C)')
-        self.ax2.set_ylabel('RPM Ventilador')
+        self.ax2.set_ylabel('Error (°C)')
         self.ax3.set_ylabel('Acción PI')
-        self.ax3.set_xlabel('Tiempo (s)')
+        self.ax4.set_ylabel('RPM Ventilador')
+        self.ax4.set_xlabel('Tiempo (s)')
 
         self.canvas = FigureCanvasTkAgg(self.fig, self.plot_frame)
+        self.fig.subplots_adjust(hspace=0.25, top=0.95)
         self.canvas.draw()
         self.canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
 
@@ -117,8 +127,14 @@ class SimuladorVentiladorCPU:
         toolbar_frame.pack(fill=tk.X)
         NavigationToolbar2Tk(self.canvas, toolbar_frame)
 
+    def log(self, mensaje):
+        print(mensaje)
+        self.resultado_text.insert(tk.END, mensaje + '\n')
+        self.resultado_text.see(tk.END)
+
     def ejecutar_simulacion(self):
         try:
+            self.resultado_text.delete(1.0, tk.END)
             temp_ref = self.params['temp_ref'].get()
             temp_ambiente = self.params['temp_ambiente'].get()
             Kp = self.params['Kp'].get()
@@ -138,29 +154,45 @@ class SimuladorVentiladorCPU:
             emi_dur = self.perturbaciones['emi_duracion'].get()
             emi_mag = self.perturbaciones['emi_magnitud'].get()
 
+            pert_carga_ini = self.perturbaciones['pert_carga_inicio'].get()
+            pert_carga_dur = self.perturbaciones['pert_carga_duracion'].get()
+            pert_carga_mag = self.perturbaciones['pert_carga_magnitud'].get()
+
+            umbral = self.params['umbral'].get()
+
             t_values = np.arange(0, T, dt)
             temp_cpu = temp_ambiente + 10
             integral = 0
             error_prev = 0
+            p=0
+            i=0
+            d=0
 
             temps = []
             rpms = []
             accion_p = []
             accion_i = []
-            #accion_d = []
+            accion_d = []
+            refs = []
+            errores = []
+            controles = []
+            salida_actuador = []
+            perturbaciones = []
+
             falla_detectada = False
 
-            print(f"\n=== INICIO DE SIMULACIÓN ===")
-            print(f"Temperatura objetivo: {temp_ref}°C")
-            print(f"Temperatura inicial: {temp_cpu}°C")
-            print(f"Ganancias: Kp={Kp}, Ki={Ki}, Kd={Kd}")
-            print(f"RPM inicial: {rpm}")
-            print(f"Generación de calor: {q_cpu}°C/s")
-            print(f"Coef. disipación: {coef_diss}°C/s/RPM")
-            print(f"Perturbación EMI: inicio={emi_ini}s, duración={emi_dur}s, magnitud={emi_mag}RPM")
-            print(f"Tiempo de muestreo: {dt}s, Tiempo total: {T}s")
-            print(f"{'Tiempo':>8} {'Temp':>8} {'RPM':>8} {'Error':>8} {'Acción P':>10} {'Acción I':>10} {'Acción D':>10} {'EMI':>6}")
-            print("-" * 80)
+            self.log(f"\n=== INICIO DE SIMULACIÓN ===")
+            self.log(f"Temperatura objetivo: {temp_ref}°C")
+            self.log(f"Temperatura inicial: {temp_cpu}°C")
+            self.log(f"Ganancias: Kp={Kp}, Ki={Ki}, Kd={Kd}")
+            self.log(f"RPM inicial: {rpm}")
+            self.log(f"Generación de calor: {q_cpu}°C/s")
+            self.log(f"Coef. disipación: {coef_diss}°C/s/RPM")
+            self.log(f"Perturbación EMI: inicio={emi_ini}s, duración={emi_dur}s, magnitud={emi_mag}RPM")
+            self.log(f"Perturbación de carga: inicio={pert_carga_ini}s, duración={pert_carga_dur}s, magnitud={pert_carga_mag}°C/s")
+            self.log(f"Tiempo de muestreo: {dt}s, Tiempo total: {T}s")
+            self.log(f"{'Tiempo':>8} {'Temp':>8} {'RPM':>8} {'Error':>8} {'Acción P':>10} {'Acción I':>10} {'Acción D':>10} {'EMI':>6} {'Pert. carga':>12}")
+            self.log("-" * 80)
 
             for t in t_values:
                 """
@@ -188,10 +220,10 @@ class SimuladorVentiladorCPU:
                 # 1. Calculá el error
                 error = temp_ref - temp_cpu
                 
-                if abs(error) < 3:
+                if abs(error) < umbral:
                     control = 0 # zona muerta
                 else:
-                    # 2. Calculá términos P, I, D (pero NO sumes todavía la integral)
+                    # 2. Calculá términos P, I, D
                     p = Kp * error
                     d = Kd * (error - error_prev) / dt
 
@@ -199,22 +231,25 @@ class SimuladorVentiladorCPU:
                     integral_candidate = integral + error * dt
                     i = Ki * integral_candidate
                     # 4. Calculá la salida total de control
-                    control = -(p + i)
+                    control = -(p + i + d)
 
-                max_delta_rpm = 100   # 100–200 RPM por ciclo es un valor típico para un dt = 0.5 s.
+                #max_delta_rpm = 100   # 100–200 RPM por ciclo es un valor típico para un dt = 0.5 s.
 
                 # Antes de aplicar el cambio de RPM, limitá la variación máxima:
-                if control > max_delta_rpm:
-                    control = max_delta_rpm
-                elif control < -max_delta_rpm:
-                    control = -max_delta_rpm
+                #if control > max_delta_rpm:
+                #    control = max_delta_rpm
+                #elif control < -max_delta_rpm:
+                #    control = -max_delta_rpm
 
                 # 5. Aplicá el control a RPM y hacé el clamp
                 rpm += control
 
                 # 6. Perturbación EMI
-                if emi_ini <= t <= emi_ini + emi_dur:
-                    rpm -= emi_mag
+                perturbacion_emi = 0
+                emi_activa = emi_ini <= t <= emi_ini + emi_dur
+                if emi_activa:
+                    perturbacion_emi = -emi_mag
+                    rpm += perturbacion_emi
 
                 rpm = max(rpm_min, min(rpm_max, rpm))
 
@@ -228,7 +263,7 @@ class SimuladorVentiladorCPU:
                     integral = max(min(integral, 300), -300)
 
                 # 7. Guardá el error para el derivativo
-                #error_prev = error
+                error_prev = error
 
                 ruido = random.uniform(-0.1, 0.1)  # ahora el ruido es de solo ±0.1 °C
 
@@ -237,7 +272,11 @@ class SimuladorVentiladorCPU:
                 #coef_pasivo = 0.005
                 #tau = 10
                 # Cambio de temperatura
-                dtemp = (q_cpu - efecto_ventilador) * dt
+                q_cpu_efectivo = q_cpu
+                carga_activa = pert_carga_ini <= t <= pert_carga_ini + pert_carga_dur
+                if carga_activa:
+                    q_cpu_efectivo += pert_carga_mag
+                dtemp = (q_cpu_efectivo - efecto_ventilador) * dt
                 #dtemp = (q_cpu - efecto_ventilador - (temp_cpu - temp_ambiente)/tau) * dt
                 temp_cpu += dtemp + ruido
                 temp_cpu = max(temp_ambiente, temp_cpu)
@@ -246,21 +285,30 @@ class SimuladorVentiladorCPU:
                 rpms.append(rpm)
                 accion_p.append(p)
                 accion_i.append(i)
-                #accion_d.append(d)
-
+                accion_d.append(d)
+                refs.append(temp_ref)
+                errores.append(error)
+                controles.append(control)
+                salida_actuador.append(rpm)  # Salida del actuador (RPM final)
+                perturbaciones.append(perturbacion_emi)  # Perturbación EMI
+                
                 # Log cada 5 muestras para no saturar la consola
-                emi_activa = emi_ini <= t <= emi_ini + emi_dur
                 emi_texto = "SÍ" if emi_activa else "NO"
+                carga_texto = "SÍ" if carga_activa else "NO"
                 if len(temps) % 5 == 0:  # Mostrar cada 5 muestras
-                    print(f"{t:8.1f} {temp_cpu:8.2f} {rpm:8.0f} {error:8.2f} {p:10.2f} {i:10.2f} {d:10.2f} {emi_texto:>6}")
+                    print(f"{t:8.1f} {temp_cpu:8.2f} {rpm:8.0f} {error:8.2f} {p:10.2f} {i:10.2f} {d:10.2f} {emi_texto:>6} {carga_texto:>12}")
 
-                if (emi_dur / T > 0.5) and abs(temp_ref - temp_cpu) > 20:
+                if (
+                    ((emi_dur / T > 0.5) or (pert_carga_dur / T > 0.5))
+                    and abs(temp_ref - temp_cpu) > 20
+                ):
                     falla_detectada = True
 
             idx_falla = np.where(t_values >= emi_ini)[0][0] if falla_detectada else None
 
-            # Gráfico 1 - Temperatura
+            # Gráfico 1 - Salida del sistema (Temperatura)
             self.ax1.clear()
+            self.ax1.axhspan(temp_ref - umbral, temp_ref + umbral, color='green', alpha=0.15, label='Franja aceptable')
             if falla_detectada:
                 self.ax1.plot(t_values[:idx_falla], temps[:idx_falla], label='Temp CPU')
                 self.ax1.plot(t_values[idx_falla:], temps[idx_falla:], color='red', label='Temp durante Falla')
@@ -272,25 +320,30 @@ class SimuladorVentiladorCPU:
             self.ax1.axvline(emi_ini, color='red', linestyle='--', alpha=0.7, label='Inicio EMI')
             self.ax1.axvline(emi_ini + emi_dur, color='purple', linestyle='--', alpha=0.7, label='Fin EMI')
             self.ax1.axvspan(emi_ini, emi_ini + emi_dur, color='red', alpha=0.1)
+            self.ax1.axvspan(pert_carga_ini, pert_carga_ini + pert_carga_dur, color='orange', alpha=0.15, label='Pert. carga')
             self.ax1.set_ylabel('Temp CPU (°C)')
             self.ax1.legend()
             self.ax1.grid(True)
 
-            # Gráfico 2 - RPM
+            # Gráfico 2 - Error (Temperatura deseada - temperatura real)
             self.ax2.clear()
+            self.ax2.axhspan(-umbral, umbral, color='green', alpha=0.15, label='Franja aceptable')
             if falla_detectada:
-                self.ax2.plot(t_values[:idx_falla], rpms[:idx_falla], label='RPM')
-                self.ax2.plot(t_values[idx_falla:], rpms[idx_falla:], color='red', label='RPM durante Falla')
+                self.ax2.plot(t_values[:idx_falla], errores[:idx_falla], color='magenta', label='Error')
+                self.ax2.plot(t_values[idx_falla:], errores[idx_falla:], color='red', label='Error durante Falla')
             else:
-                self.ax2.plot(t_values, rpms, label='RPM')
+                self.ax2.plot(t_values, errores, color='magenta', label='Error')
+            self.ax2.axhline(0, color='black', linestyle='-', alpha=0.5)
             self.ax2.axvline(emi_ini, color='red', linestyle='--', alpha=0.7)
             self.ax2.axvline(emi_ini + emi_dur, color='purple', linestyle='--', alpha=0.7)
             self.ax2.axvspan(emi_ini, emi_ini + emi_dur, color='red', alpha=0.1)
-            self.ax2.set_ylabel('RPM Ventilador')
+            self.ax2.axvspan(pert_carga_ini, pert_carga_ini + pert_carga_dur, color='orange', alpha=0.15, label='_nolegend_')
+            self.ax2.set_ylabel('Error (°C)')
             self.ax2.legend()
             self.ax2.grid(True)
 
-            # Gráfico 3 - Acción PI
+            """
+            # Gráfico 3 - Acción del controlador (acción proporcional - integral)
             self.ax3.clear()
             if falla_detectada:
                 self.ax3.plot(t_values[:idx_falla], accion_p[:idx_falla], color='orange', label='Acción Proporcional')
@@ -303,34 +356,69 @@ class SimuladorVentiladorCPU:
                 self.ax3.plot(t_values, accion_p, color='orange', label='Acción Proporcional')
                 self.ax3.plot(t_values, accion_i, color='green', label='Acción Integral')
                 # self.ax3.plot(t_values, accion_d, color='blue', label='Acción Derivativa')
+            self.ax3.axhline(0, color='black', linestyle='-', alpha=0.5)
             self.ax3.axvline(emi_ini, color='red', linestyle='--', alpha=0.7)
             self.ax3.axvline(emi_ini + emi_dur, color='purple', linestyle='--', alpha=0.7)
             self.ax3.axvspan(emi_ini, emi_ini + emi_dur, color='red', alpha=0.1)
             self.ax3.set_ylabel('Acción PI')
-            self.ax3.set_xlabel('Tiempo (s)')
             self.ax3.legend()
             self.ax3.grid(True)
+            """
+
+            # Gráfico 3 - Acción del controlador (control final aplicado)
+            self.ax3.clear()
+            if falla_detectada:
+                self.ax3.plot(t_values[:idx_falla], controles[:idx_falla], color='orange', label='Control')
+                self.ax3.plot(t_values[idx_falla:], controles[idx_falla:], color='red', label='Control durante Falla')
+            else:
+                self.ax3.plot(t_values, controles, color='orange', label='Control')
+            self.ax3.axhline(0, color='black', linestyle='-', alpha=0.5)
+            self.ax3.axvline(emi_ini, color='red', linestyle='--', alpha=0.7)
+            self.ax3.axvline(emi_ini + emi_dur, color='purple', linestyle='--', alpha=0.7)
+            self.ax3.axvspan(emi_ini, emi_ini + emi_dur, color='red', alpha=0.1)
+            self.ax3.axvspan(pert_carga_ini, pert_carga_ini + pert_carga_dur, color='orange', alpha=0.15, label='_nolegend_')
+            self.ax3.set_ylabel('Control')
+            self.ax3.legend()
+            self.ax3.grid(True)
+
+            # Gráfico 4 - Acción del actuador (RPM del ventilador)
+            self.ax4.clear()
+            if falla_detectada:
+                self.ax4.plot(t_values[:idx_falla], rpms[:idx_falla], label='RPM')
+                self.ax4.plot(t_values[idx_falla:], rpms[idx_falla:], color='red', label='RPM durante Falla')
+            else:
+                self.ax4.plot(t_values, rpms, label='RPM')
+            self.ax4.axvline(emi_ini, color='red', linestyle='--', alpha=0.7)
+            self.ax4.axvline(emi_ini + emi_dur, color='purple', linestyle='--', alpha=0.7)
+            self.ax4.axvspan(emi_ini, emi_ini + emi_dur, color='red', alpha=0.1)
+            self.ax4.axvspan(pert_carga_ini, pert_carga_ini + pert_carga_dur, color='orange', alpha=0.15, label='_nolegend_')
+            self.ax4.set_ylabel('RPM Ventilador')
+            self.ax4.set_xlabel('Tiempo (s)')
+            self.ax4.legend()
+            self.ax4.grid(True)
+
+            # Ajustar espacios y márgenes de la figura
+            self.fig.subplots_adjust(hspace=0.25, top=0.95)
 
             self.canvas.draw()
             self.fig.savefig("simulacion_resultado.png")
 
             # Resumen final en consola
-            print("-" * 70)
-            print(f"=== RESUMEN DE SIMULACIÓN ===")
-            print(f"Temperatura final: {temp_cpu:.2f}°C")
-            print(f"RPM final: {rpm:.0f}")
-            print(f"Error final: {temp_ref - temp_cpu:.2f}°C")
-            print(f"Temperatura máxima alcanzada: {max(temps):.2f}°C")
-            print(f"Temperatura mínima alcanzada: {min(temps):.2f}°C")
-            print(f"RPM máximo alcanzado: {max(rpms):.0f}")
-            print(f"RPM mínimo alcanzado: {min(rpms):.0f}")
-            print(f"Generación de calor: {q_cpu}°C/s")
-            print(f"Coef. disipación: {coef_diss}°C/s/RPM")
+            self.log("-" * 70)
+            self.log(f"=== RESUMEN DE SIMULACIÓN ===")
+            self.log(f"Temperatura final: {temp_cpu:.2f}°C")
+            self.log(f"RPM final: {rpm:.0f}")
+            self.log(f"Error final: {temp_ref - temp_cpu:.2f}°C")
+            self.log(f"Temperatura máxima alcanzada: {max(temps):.2f}°C")
+            self.log(f"Temperatura mínima alcanzada: {min(temps):.2f}°C")
+            self.log(f"RPM máximo alcanzado: {max(rpms):.0f}")
+            self.log(f"RPM mínimo alcanzado: {min(rpms):.0f}")
+            self.log(f"Generación de calor: {q_cpu}°C/s")
+            self.log(f"Coef. disipación: {coef_diss}°C/s/RPM")
             if falla_detectada:
-                print("¡FALLA DEL SISTEMA DETECTADA!")
-            print("=" * 30)
+                self.log("¡FALLA DEL SISTEMA DETECTADA!")
+            self.log("=" * 30)
 
-            self.resultado_text.delete(1.0, tk.END)
             self.resultado_text.insert(tk.END, f"Simulación completada con Kp={Kp}, Ki={Ki}\n")
             if falla_detectada:
                 self.resultado_text.insert(tk.END, "¡Falla del sistema detectada por perturbación prolongada!\n")
