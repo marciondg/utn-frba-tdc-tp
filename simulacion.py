@@ -337,7 +337,7 @@ class SimuladorVentiladorCPU:
             self.ax1.axvspan(emi_ini, emi_ini + emi_dur, color='red', alpha=0.1)
             self.ax1.axvspan(pert_carga_ini, pert_carga_ini + pert_carga_dur, color='orange', alpha=0.15, label='Pert. carga')
             self.ax1.set_ylabel('Temp CPU (°C)')
-            self.ax1.legend()
+            self.ax1.legend(loc='lower right')
             self.ax1.grid(True)
             self.ax1.set_xlim(0, T)
 
