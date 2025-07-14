@@ -2,7 +2,7 @@
 
 #### UTN FRBA 2025 1C
 
-#### Sistema de control de velocidad de un ventilador de computadora
+#### Sistema de control de velocidad de un ventilador y temperatura de computadora
 
 ## Requisitos
 
